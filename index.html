@@ -362,6 +362,7 @@
 
     audioPreview.pause();
     audioPreview.removeAttribute("src");
+    audioPreview.load();
     audioPreview.hidden = true;
 
     if (audioUrl) {
