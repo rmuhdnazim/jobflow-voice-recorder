@@ -1,0 +1,382 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JobFlow MY - Voice Recorder</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: Arial, sans-serif;
+      background: #f1f5f9;
+      color: #1e293b;
+    }
+
+    .container {
+      max-width: 480px;
+      margin: 30px auto;
+      padding: 25px;
+      background: white;
+      border-radius: 14px;
+      box-shadow: 0 4px 18px rgba(0,0,0,0.08);
+    }
+
+    h2 {
+      margin-top: 0;
+      color: #1d4ed8;
+    }
+
+    p {
+      line-height: 1.5;
+      color: #64748b;
+    }
+
+    button {
+      width: 100%;
+      padding: 14px;
+      margin-top: 12px;
+      border: none;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+
+    .start {
+      background: #2563eb;
+      color: white;
+    }
+
+    .stop {
+      background: #dc2626;
+      color: white;
+    }
+
+    .send {
+      background: #15803d;
+      color: white;
+    }
+
+    .clear {
+      background: #e2e8f0;
+      color: #1e293b;
+    }
+
+    #status {
+      margin-top: 20px;
+      padding: 12px;
+      border-radius: 8px;
+      background: #f1f5f9;
+      font-size: 14px;
+    }
+
+    audio {
+      width: 100%;
+      margin-top: 18px;
+    }
+
+    .small {
+      font-size: 12px;
+    }
+  </style>
+</head>
+
+<body>
+
+<div class="container">
+
+  <h2>JobFlow MY</h2>
+  <h3>Voice Note Recorder</h3>
+
+  <p>
+    Record an explanation of the additional work
+    for your Change Order.
+  </p>
+
+  <button id="startButton" class="start">
+    🎙 Start Recording
+  </button>
+
+  <button id="stopButton" class="stop" disabled>
+    ⏹ Stop Recording
+  </button>
+
+  <audio id="audioPreview" controls hidden></audio>
+
+  <button id="sendButton" class="send" disabled>
+    ✓ Return Recording to JobFlow MY
+  </button>
+
+  <button id="clearButton" class="clear" disabled>
+    Clear Recording
+  </button>
+
+  <div id="status" aria-live="polite">
+    Connecting to JobFlow MY...
+  </div>
+
+  <p class="small">
+    Maximum recording size: 10 MB.
+    Allow microphone access when Chrome asks.
+  </p>
+
+</div>
+
+<script>
+  const startButton = document.getElementById("startButton");
+  const stopButton = document.getElementById("stopButton");
+  const sendButton = document.getElementById("sendButton");
+  const clearButton = document.getElementById("clearButton");
+  const audioPreview = document.getElementById("audioPreview");
+  const statusBox = document.getElementById("status");
+
+  let mediaRecorder = null;
+  let audioChunks = [];
+  let recordedBlob = null;
+  let audioUrl = null;
+  let openerOrigin = null;
+  let recorderReady = false;
+
+  const MAX_SIZE = 10 * 1024 * 1024;
+
+  function setStatus(message) {
+    statusBox.textContent = message;
+  }
+
+  // Confirm that this page was opened by JobFlow MY.
+  if (!window.opener) {
+    setStatus(
+      "Please open this recorder using the button inside JobFlow MY."
+    );
+  } else {
+
+    // Initial handshake contains no private data.
+    window.opener.postMessage(
+      { type: "JOBFLOW_RECORDER_READY" },
+      "*"
+    );
+  }
+
+  // Receive initialization and acknowledgement messages.
+  window.addEventListener("message", function(event) {
+
+    if (event.source !== window.opener) {
+      return;
+    }
+
+    if (event.data && event.data.type === "JOBFLOW_INIT") {
+      openerOrigin = event.origin;
+      recorderReady = true;
+
+      setStatus(
+        "Connected to JobFlow MY. You can start recording."
+      );
+    }
+
+    if (event.data &&
+        event.data.type === "JOBFLOW_VOICE_RECEIVED") {
+
+      setStatus(
+        "Recording successfully returned to JobFlow MY."
+      );
+
+      sendButton.disabled = true;
+    }
+  });
+
+  // Start recording.
+  startButton.addEventListener("click", async function() {
+
+    try {
+
+      if (!recorderReady || !openerOrigin) {
+        throw new Error(
+          "Not connected to JobFlow MY. Please reopen the recorder."
+        );
+      }
+
+      if (!navigator.mediaDevices ||
+          !navigator.mediaDevices.getUserMedia ||
+          !window.MediaRecorder) {
+
+        throw new Error(
+          "Your browser does not support microphone recording."
+        );
+      }
+
+      const stream =
+        await navigator.mediaDevices.getUserMedia({
+          audio: true
+        });
+
+      audioChunks = [];
+
+      let options = {};
+
+      const formats = [
+        "audio/webm;codecs=opus",
+        "audio/mp4",
+        "audio/webm"
+      ];
+
+      for (const format of formats) {
+        if (MediaRecorder.isTypeSupported(format)) {
+          options.mimeType = format;
+          break;
+        }
+      }
+
+      mediaRecorder = new MediaRecorder(stream, options);
+
+      mediaRecorder.ondataavailable = function(event) {
+        if (event.data && event.data.size > 0) {
+          audioChunks.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = function() {
+
+        const audioType =
+          mediaRecorder.mimeType || "audio/webm";
+
+        recordedBlob = new Blob(audioChunks, {
+          type: audioType
+        });
+
+        stream.getTracks().forEach(function(track) {
+          track.stop();
+        });
+
+        if (recordedBlob.size > MAX_SIZE) {
+
+          recordedBlob = null;
+
+          setStatus(
+            "Recording exceeds 10 MB. Please make a shorter recording."
+          );
+
+          sendButton.disabled = true;
+          clearButton.disabled = false;
+          return;
+        }
+
+        if (audioUrl) {
+          URL.revokeObjectURL(audioUrl);
+        }
+
+        audioUrl = URL.createObjectURL(recordedBlob);
+
+        audioPreview.src = audioUrl;
+        audioPreview.hidden = false;
+
+        sendButton.disabled = false;
+        clearButton.disabled = false;
+
+        setStatus(
+          "Recording completed. Listen to your audio before returning it."
+        );
+      };
+
+      mediaRecorder.start();
+
+      startButton.disabled = true;
+      stopButton.disabled = false;
+      sendButton.disabled = true;
+
+      audioPreview.hidden = true;
+
+      setStatus("🔴 Recording in progress...");
+
+    } catch (error) {
+
+      setStatus(
+        "Recording error: " + error.message
+      );
+    }
+  });
+
+  // Stop recording.
+  stopButton.addEventListener("click", function() {
+
+    if (mediaRecorder &&
+        mediaRecorder.state === "recording") {
+
+      mediaRecorder.stop();
+
+      startButton.disabled = false;
+      stopButton.disabled = true;
+    }
+  });
+
+  // Return audio to the JobFlow MY window.
+  sendButton.addEventListener("click", function() {
+
+    if (!recordedBlob || !openerOrigin || !window.opener) {
+      setStatus("No valid recording or connection found.");
+      return;
+    }
+
+    sendButton.disabled = true;
+
+    try {
+
+      window.opener.postMessage(
+        {
+          type: "JOBFLOW_VOICE_RECORDED",
+          blob: recordedBlob
+        },
+        openerOrigin
+      );
+
+      setStatus(
+        "Sending recording to JobFlow MY..."
+      );
+
+    } catch (error) {
+
+      sendButton.disabled = false;
+
+      setStatus(
+        "Unable to return recording: " + error.message
+      );
+    }
+  });
+
+  // Clear audio and record again.
+  clearButton.addEventListener("click", function() {
+
+    recordedBlob = null;
+    audioChunks = [];
+
+    audioPreview.pause();
+    audioPreview.removeAttribute("src");
+    audioPreview.hidden = true;
+
+    if (audioUrl) {
+      URL.revokeObjectURL(audioUrl);
+      audioUrl = null;
+    }
+
+    sendButton.disabled = true;
+    clearButton.disabled = true;
+    startButton.disabled = false;
+
+    setStatus("Recording cleared. Ready to record again.");
+  });
+
+</script>
+
+</body>
+</html>
